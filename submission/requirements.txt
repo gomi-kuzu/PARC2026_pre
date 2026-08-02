@@ -1,0 +1,35 @@
+# ポリシーサーバーの依存（必須、削除しないでください）
+fastapi>=0.68
+uvicorn>=0.15
+msgpack>=1.0
+numpy>=1.19
+
+# LeRobot v0.4.4 SmolVLA推論に必要な依存関係
+# 注意: Python 3.10.12環境用（v0.4.4が最後のPython 3.10対応版）
+# LeRobot本体は別途インストール: pip install -e lerobot
+
+# transformers関連
+transformers>=4.57.1,<5.0.0
+num2words>=0.5.14,<0.6.0
+accelerate>=1.7.0,<2.0.0
+safetensors>=0.4.3,<1.0.0
+
+# PyTorch (LeRobot v0.4.4互換バージョン)
+torch==2.10.0
+torchvision==0.25.0
+
+# データ処理
+datasets>=4.0.0,<5.0.0
+diffusers>=0.27.2,<0.36.0
+jsonlines>=4.0.0,<5.0.0
+deepdiff>=7.0.1,<9.0.0
+
+# システム依存
+pyserial>=3.5,<4.0
+av>=15.0.0,<16.0.0
+
+# その他の基本依存
+Pillow>=9.0
+opencv-python>=4.5
+einops>=0.6.0
+gymnasium>=0.28.0
