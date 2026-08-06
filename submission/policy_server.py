@@ -121,18 +121,26 @@ class MyPolicy(BasePolicy):
         print(f"  - chunk_size: {config.chunk_size}")
         print(f"  - n_action_steps: {config.n_action_steps}")
         
-        # deviceを文字列に変換（v0.4.4互換性のため）
-        config.device = "cpu"
+        # deviceを文字列に変換（v0.4.4のsafetensors互換性のため）
+        # cuda が利用可能な場合は "cuda"、そうでなければ "cpu"
+        config.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # ポリシーをロード
         print(f"[MyPolicy] Loading SmolVLAPolicy...")
-        self.policy = SmolVLAPolicy.from_pretrained(
-            model_path, 
-            config=config,
-            strict=False
-        )
-        self.policy.eval()
-        print(f"[MyPolicy] Policy loaded successfully and set to eval mode")
+        print(f"[MyPolicy] Loading v0.4.4 trained weights in v0.4.4 environment")
+        
+        try:
+            self.policy = SmolVLAPolicy.from_pretrained(
+                model_path, 
+                config=config,
+                strict=True
+            )
+            self.policy.eval()
+            print(f"[MyPolicy] Policy loaded successfully and set to eval mode")
+        except Exception as e:
+            print(f"[MyPolicy] ERROR during model loading: {type(e).__name__}: {e}")
+            print(f"[MyPolicy] This may indicate incompatibility between v0.6.0 weights and v0.4.4 code")
+            raise
         
         # トークナイザーをロード
         print(f"[MyPolicy] Loading tokenizer: {config.vlm_model_name}")
@@ -171,6 +179,7 @@ class MyPolicy(BasePolicy):
             mapped_obs = {}
             
             # 画像のマッピングと前処理
+            # 学習時のrename_mapに合わせて camera1, camera2, camera3 を使用
             if 'agentview_image' in obs:
                 img = obs['agentview_image']  # (128, 128, 3) uint8
                 # (H,W,C) -> (C,H,W) に転置
@@ -180,8 +189,8 @@ class MyPolicy(BasePolicy):
                 # tensor変換とリサイズ (128,128) -> (256,256)
                 img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
                 img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
-                # バッチ次元を保持 (1, 3, 256, 256)
-                mapped_obs['observation.images.front'] = img_tensor
+                # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
+                mapped_obs['observation.images.camera1'] = img_tensor.to(self.device)
             
             if 'robot0_eye_in_hand_image' in obs:
                 img = obs['robot0_eye_in_hand_image']  # (128, 128, 3) uint8
@@ -192,8 +201,10 @@ class MyPolicy(BasePolicy):
                 # tensor変換とリサイズ (128,128) -> (256,256)
                 img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
                 img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
-                # バッチ次元を保持 (1, 3, 256, 256)
-                mapped_obs['observation.images.wrist'] = img_tensor
+                # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
+                # camera2とcamera3に同じ画像を設定（学習時のrename_mapに従う）
+                mapped_obs['observation.images.camera2'] = img_tensor.to(self.device)
+                mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
             
             # 状態データの結合 (8次元に)
             # robot0_eef_pos (3) + robot0_eef_quat (4) + robot0_gripper_qpos[0] (1) = 8
@@ -207,8 +218,8 @@ class MyPolicy(BasePolicy):
             
             if state_components:
                 state = np.concatenate(state_components, axis=0)  # (8,)
-                # バッチ次元を追加 (1, 8)
-                mapped_obs['observation.state'] = torch.from_numpy(state.astype(np.float32)).unsqueeze(0)
+                # バッチ次元を追加してGPUに転送 (1, 8)
+                mapped_obs['observation.state'] = torch.from_numpy(state.astype(np.float32)).unsqueeze(0).to(self.device)
             
             # 言語指示をトークン化
             task_text = self.instruction if hasattr(self, 'instruction') and self.instruction else ""
@@ -223,15 +234,16 @@ class MyPolicy(BasePolicy):
                 max_length=48,
                 return_tensors="pt"
             )
-            mapped_obs['observation.language.tokens'] = tokenized['input_ids']  # (1, 48)
-            # attention_maskをbool型に変換（torch.whereがboolean tensorを要求するため）
-            mapped_obs['observation.language.attention_mask'] = tokenized['attention_mask'].bool()  # (1, 48)
+            # トークンをGPUに転送
+            mapped_obs['observation.language.tokens'] = tokenized['input_ids'].to(self.device)  # (1, 48)
+            # attention_maskをbool型に変換してGPUに転送（torch.whereがboolean tensorを要求するため）
+            mapped_obs['observation.language.attention_mask'] = tokenized['attention_mask'].bool().to(self.device)  # (1, 48)
             
             if self.action_count < 3:
                 print(f"[MyPolicy] Mapped observation keys: {list(mapped_obs.keys())}")
                 for key, value in mapped_obs.items():
                     if isinstance(value, torch.Tensor):
-                        print(f"  - {key}: shape={value.shape}, dtype={value.dtype}")
+                        print(f"  - {key}: shape={value.shape}, dtype={value.dtype}, device={value.device}")
                     else:
                         print(f"  - {key}: {type(value)}")
             
