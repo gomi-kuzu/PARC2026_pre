@@ -15,6 +15,8 @@ accelerate>=1.7.0,<2.0.0
 safetensors>=0.4.3,<1.0.0
 
 # PyTorch (LeRobot v0.4.4互換バージョン)
+# GPU環境: pip install torch==2.10.0 torchvision==0.25.0 (デフォルトでCUDA版)
+# CPU環境: pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
 torch==2.10.0
 torchvision==0.25.0
 
