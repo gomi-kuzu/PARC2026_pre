@@ -13,7 +13,15 @@
 """
 
 import argparse
+import sys
 from abc import ABC, abstractmethod
+from pathlib import Path
+
+# バンドルされたlerobotディレクトリをsys.pathに追加
+_script_dir = Path(__file__).parent
+_lerobot_src = _script_dir / "lerobot" / "src"
+if _lerobot_src.exists() and str(_lerobot_src) not in sys.path:
+    sys.path.insert(0, str(_lerobot_src))
 
 import msgpack
 import numpy as np
@@ -75,12 +83,12 @@ class MyPolicy(BasePolicy):
     注意: Python 3.10.12環境用 (v0.4.4が最後のPython 3.10対応版)
     """
 
-    def __init__(self, model_path: str = "submission/model_weights"):
+    def __init__(self, model_path: str = "model_weights"):
         """LoRAで学習したLeRobotモデルをロードする。
         
         Args:
             model_path: モデルのディレクトリパス（config.json, model.safetensors等を含む）
-                       デフォルトは "submission/model_weights" (/workspaceから起動する場合)
+                       デフォルトは "model_weights" (policy_server.pyと同じディレクトリからの相対パス)
         """
         import torch
         from pathlib import Path
@@ -182,6 +190,8 @@ class MyPolicy(BasePolicy):
             # 学習時のrename_mapに合わせて camera1, camera2, camera3 を使用
             if 'agentview_image' in obs:
                 img = obs['agentview_image']  # (128, 128, 3) uint8
+                # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
+                img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
                 # (H,W,C) -> (C,H,W) に転置
                 img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
                 # uint8 [0,255] -> float32 [0,1]
@@ -194,6 +204,8 @@ class MyPolicy(BasePolicy):
             
             if 'robot0_eye_in_hand_image' in obs:
                 img = obs['robot0_eye_in_hand_image']  # (128, 128, 3) uint8
+                # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
+                img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
                 # (H,W,C) -> (C,H,W) に転置
                 img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
                 # uint8 [0,255] -> float32 [0,1]

@@ -542,7 +542,7 @@ def smoke_test(submission_dir: str | Path, report: Report | None = None, *,
             cwd=str(d), capture_output=True, text=True,
         )
         if pi.returncode != 0:
-            tail = (pi.stderr or pi.stdout).strip().splitlines()[-5:]
+            tail = (pi.stderr or pi.stdout).strip().splitlines()[-50:]
             report.error("smoke.install_failed",
                          "依存インストールに失敗:\n      " + "\n      ".join(tail))
             return report

@@ -5,8 +5,7 @@ msgpack>=1.0
 numpy>=1.19
 
 # LeRobot v0.4.4 SmolVLA推論に必要な依存関係
-# 注意: Python 3.10.12環境用（v0.4.4が最後のPython 3.10対応版）
-lerobot==0.4.4
+# 注意: バンドルされたlerobotディレクトリをsys.pathで読み込むため、ここではlerobotの依存のみ記載
 
 # transformers関連（LeRobotの依存に含まれるが、バージョンを明示）
 transformers>=4.57.1,<5.0.0
