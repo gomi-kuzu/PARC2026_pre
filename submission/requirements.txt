@@ -6,9 +6,9 @@ numpy>=1.19
 
 # LeRobot v0.4.4 SmolVLA推論に必要な依存関係
 # 注意: Python 3.10.12環境用（v0.4.4が最後のPython 3.10対応版）
-# LeRobot本体は別途インストール: pip install -e lerobot
+lerobot==0.4.4
 
-# transformers関連
+# transformers関連（LeRobotの依存に含まれるが、バージョンを明示）
 transformers>=4.57.1,<5.0.0
 num2words>=0.5.14,<0.6.0
 accelerate>=1.7.0,<2.0.0
