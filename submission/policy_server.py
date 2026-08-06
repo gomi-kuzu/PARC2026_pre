@@ -202,8 +202,8 @@ class MyPolicy(BasePolicy):
                 img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
                 img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
                 # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
-                # camera2とcamera3に同じ画像を設定（学習時のrename_mapに従う）
-                mapped_obs['observation.images.camera2'] = img_tensor.to(self.device)
+                # 学習時のrename_map (observation.images.wrist -> camera3) に合わせる。
+                # camera2は学習時に存在しない（empty_cameras=0）ため設定しない。
                 mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
             
             # 状態データの結合 (8次元に)
