@@ -1,6 +1,7 @@
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -35,7 +36,10 @@ class EpisodeResult:
     gripper_qpos: list[np.ndarray] = field(default_factory=list)
     actions: list[np.ndarray] = field(default_factory=list)
     rewards: list[float] = field(default_factory=list)
-
+    
+    # 動画保存用
+    render_frames: list[np.ndarray] = field(default_factory=list)
+    camera_frames: dict[str, list[np.ndarray]] = field(default_factory=dict)
 
     collided: bool = False
 
@@ -191,6 +195,13 @@ class RolloutExecutor:
         policy.reset(instruction=task_info.language, seed=episode_seed)
         done = False
         total_steps = 0
+        
+        # 動画保存用のフレームバッファ
+        render_frames: list[np.ndarray] = []
+        camera_frames: dict[str, list[np.ndarray]] = {}
+        if self.config.save_video:
+            camera_frames["agentview"] = []
+            camera_frames["wrist"] = []
 
         for step in range(self.config.max_steps_per_episode):
 
@@ -214,6 +225,27 @@ class RolloutExecutor:
             gripper_qpos_log.append(obs.get("robot0_gripper_qpos", np.zeros(2)).copy())
             actions_log.append(action.copy())
             rewards_log.append(float(reward))
+            
+            # 動画保存: レンダリング画像と観測カメラ画像を収集
+            if self.config.save_video:
+                try:
+                    # ロボットの様子（レンダリング画像）
+                    # OffScreenRenderEnv には gym 形式の render() が存在しないため、
+                    # env.sim（MuJoCo simulation）から直接オフスクリーンレンダリングする
+                    render_img = env.sim.render(
+                        camera_name="frontview",
+                        height=480,
+                        width=480,
+                    )[::-1]
+                    render_frames.append(render_img)
+                    
+                    # 観測カメラ画像
+                    if "agentview_image" in obs:
+                        camera_frames["agentview"].append(obs["agentview_image"].copy())
+                    if "robot0_eye_in_hand_image" in obs:
+                        camera_frames["wrist"].append(obs["robot0_eye_in_hand_image"].copy())
+                except Exception as e:
+                    logger.warning("動画フレーム取得エラー: %s", e)
 
 
             for name, p0 in object_init_pos.items():
@@ -240,8 +272,8 @@ class RolloutExecutor:
 
         collided = any(d > collision_threshold for d in object_max_disp.values())
         success = bool(done) and not collided
-
-        return EpisodeResult(
+        
+        result = EpisodeResult(
             task_name=task_info.name,
             episode_id=episode_id,
             success=success,
@@ -254,7 +286,70 @@ class RolloutExecutor:
             actions=actions_log,
             rewards=rewards_log,
             collided=collided,
+            render_frames=render_frames,
+            camera_frames=camera_frames,
         )
+        
+        # 動画保存
+        if self.config.save_video and (render_frames or camera_frames):
+            self._save_episode_videos(result, task_info)
+        
+        return result
+
+    def _save_episode_videos(
+        self,
+        episode: EpisodeResult,
+        task_info: TaskInfo,
+    ) -> None:
+        """エピソードの動画を保存"""
+        try:
+            import imageio
+        except ImportError:
+            logger.warning("imageio がインストールされていません。動画保存をスキップします。")
+            return
+        
+        # 出力ディレクトリを作成
+        video_dir = self.config.video_dir / task_info.name
+        video_dir.mkdir(parents=True, exist_ok=True)
+        
+        success_str = "success" if episode.success else "fail"
+        prefix = f"ep{episode.episode_id:03d}_{success_str}"
+        
+        # レンダリング動画を保存
+        if episode.render_frames:
+            render_path = video_dir / f"{prefix}_render.mp4"
+            try:
+                # is_batch=False必須: imageioのpyavプラグインはデフォルト(is_batch=True)だと
+                # append_dataに渡した1枚のフレーム(H,W,C)をバッチ(フレーム枚数,H,W)と誤認識し、
+                # 中身が壊れた0バイトファイルになる
+                writer = imageio.get_writer(
+                    render_path, fps=20, codec="libx264", is_batch=False
+                )
+                for frame in episode.render_frames:
+                    writer.append_data(frame)
+                writer.close()
+                logger.info("レンダリング動画を保存: %s", render_path)
+            except Exception as e:
+                logger.warning("レンダリング動画保存エラー: %s", e)
+        
+        # 観測カメラ動画を保存
+        for cam_name, frames in episode.camera_frames.items():
+            if not frames:
+                continue
+            cam_path = video_dir / f"{prefix}_{cam_name}.mp4"
+            try:
+                writer = imageio.get_writer(
+                    cam_path, fps=20, codec="libx264", is_batch=False
+                )
+                for frame in frames:
+                    # (H, W, C) uint8 形式に変換
+                    if frame.dtype != np.uint8:
+                        frame = (frame * 255).astype(np.uint8) if frame.max() <= 1.0 else frame.astype(np.uint8)
+                    writer.append_data(frame)
+                writer.close()
+                logger.info("%s カメラ動画を保存: %s", cam_name, cam_path)
+            except Exception as e:
+                logger.warning("%s カメラ動画保存エラー: %s", cam_name, e)
 
     def evaluate_tasks(
         self,

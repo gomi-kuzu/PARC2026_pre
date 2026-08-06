@@ -106,6 +106,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="詳細ログを出力",
     )
+    parser.add_argument(
+        "--save-video",
+        action="store_true",
+        help="評価時にロボットと観測カメラの動画を保存",
+    )
+    parser.add_argument(
+        "--video-dir",
+        type=Path,
+        default=None,
+        help="動画保存先ディレクトリ（デフォルト: ./videos）",
+    )
     return parser.parse_args()
 
 
@@ -125,9 +136,12 @@ def main() -> None:
         n_eval_episodes=args.n_episodes,
         max_steps_per_episode=args.max_steps,
         seed=args.seed,
+        save_video=args.save_video,
     )
     if args.output_dir is not None:
         config.output_dir = args.output_dir
+    if args.video_dir is not None:
+        config.video_dir = args.video_dir
 
     if args.max_tasks is not None:
         config.max_tasks = args.max_tasks

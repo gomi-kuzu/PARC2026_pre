@@ -92,6 +92,12 @@ class EvalConfig:
 
     device: str = "cpu"
     seed: int = 42
+    
+    # 動画保存設定
+    save_video: bool = False
+    video_dir: Path = field(
+        default_factory=lambda: _PROJECT_ROOT / "videos"
+    )
 
 
 @dataclass
