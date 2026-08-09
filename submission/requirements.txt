@@ -13,6 +13,9 @@ num2words>=0.5.14,<0.6.0
 accelerate>=1.7.0,<2.0.0
 safetensors>=0.4.3,<1.0.0
 
+# Hugging Face
+huggingface-hub>=0.34.2,<0.36.0
+
 # PyTorch (LeRobot v0.4.4互換バージョン)
 # GPU環境: pip install torch==2.10.0 torchvision==0.25.0 (デフォルトでCUDA版)
 # CPU環境: pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
@@ -34,3 +37,8 @@ Pillow>=9.0
 opencv-python>=4.5
 einops>=0.6.0
 gymnasium>=0.28.0
+draccus==0.10.0
+packaging>=24.2,<26.0
+imageio[ffmpeg]>=2.34.0,<3.0.0
+termcolor>=2.4.0,<4.0.0
+setuptools>=71.0.0,<81.0.0
