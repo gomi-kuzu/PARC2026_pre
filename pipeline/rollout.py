@@ -236,10 +236,10 @@ class RolloutExecutor:
                         camera_name="frontview",
                         height=480,
                         width=480,
-                    )[::-1]
+                    )[::-1, ::-1]
                     render_frames.append(render_img)
                     
-                    # 観測カメラ画像
+                    # 観測カメラ画像（実際の入力データをそのまま保存）
                     if "agentview_image" in obs:
                         camera_frames["agentview"].append(obs["agentview_image"].copy())
                     if "robot0_eye_in_hand_image" in obs:
