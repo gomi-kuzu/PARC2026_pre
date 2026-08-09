@@ -263,15 +263,13 @@ class MyPolicy(BasePolicy):
             # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
             img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
             # さらに左右鏡像に補正
-            img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
+            # img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
             # (H,W,C) -> (C,H,W) に転置
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
             img = img.astype(np.float32) / 255.0
-            # tensor変換とリサイズ (128,128) -> (256,256)
+            # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
-            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
-            # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
             mapped_obs['observation.images.camera1'] = img_tensor.to(self.device)
         
         if 'robot0_eye_in_hand_image' in obs:
@@ -279,15 +277,13 @@ class MyPolicy(BasePolicy):
             # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
             img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
             # さらに左右鏡像に補正
-            img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
+            # img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
             # (H,W,C) -> (C,H,W) に転置
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
             img = img.astype(np.float32) / 255.0
-            # tensor変換とリサイズ (128,128) -> (256,256)
+            # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
-            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
-            # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
             # 学習時のrename_map (observation.images.wrist -> camera3) に合わせる。
             # camera2は学習時に存在しない（empty_cameras=0）ため設定しない。
             mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
@@ -347,9 +343,9 @@ class MyPolicy(BasePolicy):
             action_array = action_array[np.newaxis, :]
         
         # Y, Rx, Rz方向を反転（インデックス1, 3, 5）
-        # action_array[0, 1] *= -1  # Y方向
-        # action_array[0, 3] *= -1  # Rx方向
-        # action_array[0, 5] *= -1  # Rz方向
+        action_array[0, 1] *= -1  # Y方向
+        action_array[0, 3] *= -1  # Rx方向
+        action_array[0, 5] *= -1  # Rz方向
         
         # 1次元に変換して返す (1, 7) -> (7,)
         action_array = action_array.squeeze(0)
@@ -383,9 +379,8 @@ class MyPolicy(BasePolicy):
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
             img = img.astype(np.float32) / 255.0
-            # tensor変換とリサイズ (128,128) -> (256,256)
+            # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
-            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
             mapped_obs['observation.images.front'] = img_tensor.to(self.device)
         
         if 'robot0_eye_in_hand_image' in obs:
@@ -398,9 +393,8 @@ class MyPolicy(BasePolicy):
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
             img = img.astype(np.float32) / 255.0
-            # tensor変換とリサイズ (128,128) -> (256,256)
+            # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
-            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
             mapped_obs['observation.images.wrist'] = img_tensor.to(self.device)
         
         # 状態データの結合（ACT用に調整）
