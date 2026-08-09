@@ -90,6 +90,25 @@ class MyPolicy(BasePolicy):
     注意: Python 3.10.12環境用 (v0.4.4が最後のPython 3.10対応版)
     """
 
+    # ------------------------------------------------------------------
+    # Y軸に対する鏡映（左右反転）の有効/無効。
+    # 学習データと LIBERO 実行環境の Y 軸方向が反転している疑いがある場合に True。
+    # state と action の同じインデックス [1, 3, 5] を同時に符号反転することで、
+    # 座標系のねじれを起こさず一貫した鏡映変換を適用する。
+    #   - state[1]  : eef_pos_y        (並進 Y)
+    #   - state[3]  : axis_angle_x     (擬ベクトルなので X 成分が反転)
+    #   - state[5]  : axis_angle_z     (同上、Z 成分も反転)
+    #   - state[4]  : axis_angle_y     -> そのまま
+    #   - action[1] : dy               (並進 Y)
+    #   - action[3] : droll (drx)      (擬ベクトルなので X 成分が反転)
+    #   - action[5] : dyaw  (drz)      (同上、Z 成分も反転)
+    #   - action[4] : dpitch (dry)     -> そのまま
+    #   - action[6] : gripper          -> そのまま
+    # 注意: SmolVLA ブランチのみに作用（ACT ブランチは対象外）。
+    # ------------------------------------------------------------------
+    INVERT_Y_AXIS: bool = False
+    _Y_MIRROR_INDICES: tuple = (1, 3, 5)
+
     def __init__(self, model_path: str = "model_weights"):
         """LeRobotモデルをロードする。
         
@@ -179,7 +198,23 @@ class MyPolicy(BasePolicy):
             except Exception as e:
                 print(f"[MyPolicy] ERROR during model loading: {type(e).__name__}: {e}")
                 raise
-            
+
+            # --- 推論時のみアクションチャンクの実行長を短縮して closed-loop 化 ---
+            # 学習時 chunk_size=50 / n_action_steps=50 で 50 ステップ open-loop 実行だと
+            # 誤差が蓄積して「グネグネ動く」現象になりやすい。
+            # モデル自体は 50 ステップ分のアクションチャンクを生成するが、キューに積む本数を
+            # 制限することで、より頻繁に観測を取り込んで再サンプリングする（closed-loop 寄り）。
+            # 詳細: SmolVLAPolicy.select_action は
+            #   self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
+            # と書かれているため、config.n_action_steps を下げるだけでキュー投入本数を絞れる。
+            # 参考: submission/lerobot/src/lerobot/policies/smolvla/modeling_smolvla.py:346
+            _inference_n_action_steps = 16#10
+            original_n_action_steps = getattr(self.policy.config, "n_action_steps", None)
+            self.policy.config.n_action_steps = _inference_n_action_steps
+            print(f"[MyPolicy] Overriding n_action_steps for inference: "
+                  f"{original_n_action_steps} -> {_inference_n_action_steps} "
+                  f"(chunk_size={getattr(self.policy.config, 'chunk_size', 'n/a')} は変更しない)")
+
             # トークナイザーをロード（SmolVLA用）
             print(f"[MyPolicy] Loading tokenizer: {config.vlm_model_name}")
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -210,10 +245,78 @@ class MyPolicy(BasePolicy):
             
         else:
             raise ValueError(f"Unsupported policy type: {self.policy_type}. Supported types: smolvla, act")
-        
+
+        # --- 正規化統計量のロード ---
+        # LeRobot v0.4.4 では、SmolVLAPolicy.select_action() は入力(observation.state)の正規化も、
+        # 出力(action)の逆正規化も一切行わない。
+        # 正規化は本来 preprocessor / postprocessor パイプライン
+        # (make_smolvla_pre_post_processors) が担当する設計。
+        # 参考: submission/lerobot/src/lerobot/policies/smolvla/processor_smolvla.py
+        # そのため、モデルへ渡す state は MEAN_STD 正規化して渡し、
+        # モデル出力 action は MEAN_STD 逆正規化する必要がある。
+        # (config.normalization_mapping = {"STATE": "MEAN_STD", "ACTION": "MEAN_STD"})
+        # safetensors のキーは `<feature>.mean`, `<feature>.std` の flat 形式。
+        # 参考: submission/lerobot/src/lerobot/processor/normalize_processor.py:171 (load_state_dict)
+        self.norm_stats = self._load_norm_stats(model_path_obj)
+        print(f"[MyPolicy] Normalization stats loaded: keys={list(self.norm_stats.keys())}")
+
         self.instruction = ""
         self.action_count = 0
-        
+
+    @staticmethod
+    def _load_norm_stats(model_path_obj: "Path") -> dict:
+        """policy_preprocessor / policy_postprocessor の safetensors から正規化統計量を読み込む。
+
+        Returns:
+            dict: `{feature_name: {"mean": np.ndarray, "std": np.ndarray, ...}}` の形式。
+        """
+        from safetensors.torch import load_file
+
+        stats: dict[str, dict[str, np.ndarray]] = {}
+
+        # preprocessor 側 (state / action の mean, std を含む)
+        pre_file = model_path_obj / "policy_preprocessor_step_5_normalizer_processor.safetensors"
+        # postprocessor 側 (action の mean, std)。preprocessor 側と重複しても問題ない。
+        post_file = model_path_obj / "policy_postprocessor_step_0_unnormalizer_processor.safetensors"
+
+        for f in (pre_file, post_file):
+            if not f.exists():
+                print(f"[MyPolicy] WARNING: normalization stats file not found: {f}")
+                continue
+            flat = load_file(str(f))
+            for flat_key, tensor in flat.items():
+                # flat_key 例: "observation.state.mean", "action.std"
+                key, stat_name = flat_key.rsplit(".", 1)
+                stats.setdefault(key, {})[stat_name] = tensor.cpu().numpy().astype(np.float32)
+
+        return stats
+
+    @staticmethod
+    def _quat_xyzw_to_axis_angle(quat_xyzw: np.ndarray) -> np.ndarray:
+        """クォータニオン(xyzw) を axis-angle (3,) に変換する。
+
+        LIBERO/robosuite の `robot0_eef_quat` は xyzw 順で返される。
+        学習データセット (libero_plus / libero_spatial_dataset_ex) の
+        `observation.state` の中盤 3 次元は axis-angle 表現なので、
+        推論時にも同じ表現に揃える必要がある。
+        """
+        q = np.asarray(quat_xyzw, dtype=np.float64)
+        # 数値誤差対策として正規化
+        n = np.linalg.norm(q)
+        if n < 1e-12:
+            return np.zeros(3, dtype=np.float32)
+        q = q / n
+        x, y, z, w = q
+        # w は [-1, 1] にクリップ（数値誤差対策）
+        w = float(np.clip(w, -1.0, 1.0))
+        angle = 2.0 * np.arccos(w)
+        s = np.sqrt(max(0.0, 1.0 - w * w))
+        if s < 1e-8:
+            # 回転角がほぼ 0 のとき: 軸は不定なのでゼロベクトルを返す
+            return np.zeros(3, dtype=np.float32)
+        axis = np.array([x, y, z], dtype=np.float64) / s
+        return (axis * angle).astype(np.float32)
+
     def get_action(self, obs: dict[str, np.ndarray]) -> np.ndarray:
         """観測からアクションを推論する。
         
@@ -260,10 +363,12 @@ class MyPolicy(BasePolicy):
         # 学習時のrename_mapに合わせて camera1, camera2, camera3 を使用
         if 'agentview_image' in obs:
             img = obs['agentview_image']  # (128, 128, 3) uint8
-            # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
-            img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
-            # さらに左右鏡像に補正
-            # img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
+            # 本家 LiberoProcessorStep は H,W 両方をフリップする 180° 回転のみを適用する
+            # (submission/lerobot/src/lerobot/processor/env_processor.py:59
+            #  `img = torch.flip(img, dims=[2, 3])`)
+            # → 追加の左右鏡像は不要。以下は誤りだったのでコメントアウト。
+            img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)  180°回転
+            # img = np.ascontiguousarray(np.flip(img, axis=1))  # 追加の左右鏡像は不要（本家準拠）
             # (H,W,C) -> (C,H,W) に転置
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
@@ -274,10 +379,12 @@ class MyPolicy(BasePolicy):
         
         if 'robot0_eye_in_hand_image' in obs:
             img = obs['robot0_eye_in_hand_image']  # (128, 128, 3) uint8
-            # シミュレータの出力はデータセットの向きに対して180度回転しているため補正
-            img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)
-            # さらに左右鏡像に補正
-            # img = np.ascontiguousarray(np.flip(img, axis=1))  # (128, 128, 3)
+            # 本家 LiberoProcessorStep は H,W 両方をフリップする 180° 回転のみを適用する
+            # (submission/lerobot/src/lerobot/processor/env_processor.py:59
+            #  `img = torch.flip(img, dims=[2, 3])`)
+            # → 追加の左右鏡像は不要。以下は誤りだったのでコメントアウト。
+            img = np.ascontiguousarray(np.rot90(img, k=2))  # (128, 128, 3)  180°回転
+            # img = np.ascontiguousarray(np.flip(img, axis=1))  # 追加の左右鏡像は不要（本家準拠）
             # (H,W,C) -> (C,H,W) に転置
             img = np.transpose(img, (2, 0, 1))  # (3, 128, 128)
             # uint8 [0,255] -> float32 [0,1]
@@ -289,20 +396,51 @@ class MyPolicy(BasePolicy):
             mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
         
         # 状態データの結合 (8次元に)
-        # robot0_eef_pos (3) + robot0_eef_quat (4) + robot0_gripper_qpos[0] (1) = 8
+        # 学習データセット (libero_plus / libero_spatial_dataset_ex) の仕様:
+        #   observation.state = eef_pos (3) + axis-angle (3) + gripper_qpos (2)
+        # 参考: submission_template/lerobot/docs/source/libero_plus.mdx
+        #   "8-dim proprioceptive features (eef position, axis-angle orientation, gripper qpos)"
+        # LIBERO の robot0_eef_quat は xyzw 順で返るので、そのまま axis-angle に変換する。
         state_components = []
         if 'robot0_eef_pos' in obs:
-            state_components.append(obs['robot0_eef_pos'])  # (3,)
+            state_components.append(np.asarray(obs['robot0_eef_pos'], dtype=np.float32))  # (3,)
         if 'robot0_eef_quat' in obs:
-            state_components.append(obs['robot0_eef_quat'])  # (4,)
+            axis_angle = self._quat_xyzw_to_axis_angle(obs['robot0_eef_quat'])  # (3,)
+            state_components.append(axis_angle)
         if 'robot0_gripper_qpos' in obs:
-            state_components.append(obs['robot0_gripper_qpos'][:1])  # (1,) - 最初の要素のみ
-        
+            # 両指分の 2 次元をそのまま使う（学習データの stats から対称値であることを確認済み）
+            state_components.append(np.asarray(obs['robot0_gripper_qpos'], dtype=np.float32))  # (2,)
+
         if state_components:
             state = np.concatenate(state_components, axis=0)  # (8,)
+
+            # --- Y 軸鏡映 (state 側) ---
+            # 正規化の前に、生の物理値の状態で反転する必要がある。
+            # LIBERO 環境が学習データに対して Y 反転している場合、観測 state を
+            # 「学習空間」に戻してからモデルに渡す、というのが物理的に自然な解釈。
+            if self.INVERT_Y_AXIS:
+                state = state.astype(np.float32).copy()
+                for i in self._Y_MIRROR_INDICES:
+                    state[i] *= -1.0
+                if self.action_count < 3:
+                    print(f"[MyPolicy] Y-mirror applied to state at indices {self._Y_MIRROR_INDICES}: {state}")
+
+            # --- MEAN_STD 正規化 ---
+            # 学習時と同じ MEAN_STD 正規化を適用する（config.normalization_mapping["STATE"] = "MEAN_STD"）。
+            # SmolVLAPolicy.select_action() 内では正規化されないため、ここで明示的に行う必要がある。
+            state_stats = self.norm_stats.get('observation.state')
+            if state_stats is not None and 'mean' in state_stats and 'std' in state_stats:
+                mean = state_stats['mean'].astype(np.float32)
+                std = state_stats['std'].astype(np.float32)
+                # eps は preprocessor 側と揃える (policy_preprocessor.json の eps=1e-08)
+                state = (state.astype(np.float32) - mean) / (std + 1e-8)
+                if self.action_count < 3:
+                    print(f"[MyPolicy] Normalized state (mean/std applied): {state}")
+            else:
+                print(f"[MyPolicy] WARNING: observation.state stats not found; skipping normalization")
             # バッチ次元を追加してGPUに転送 (1, 8)
             mapped_obs['observation.state'] = torch.from_numpy(state.astype(np.float32)).unsqueeze(0).to(self.device)
-        
+
         # 言語指示をトークン化
         task_text = self.instruction if hasattr(self, 'instruction') and self.instruction else ""
         if not task_text:
@@ -341,12 +479,31 @@ class MyPolicy(BasePolicy):
         # 1次元の場合は2次元に変換 (7,) -> (1, 7)
         if action_array.ndim == 1:
             action_array = action_array[np.newaxis, :]
-        
-        # Y, Rx, Rz方向を反転（インデックス1, 3, 5）
-        action_array[0, 1] *= -1  # Y方向
-        action_array[0, 3] *= -1  # Rx方向
-        action_array[0, 5] *= -1  # Rz方向
-        
+
+        # --- MEAN_STD 逆正規化 ---
+        # 学習時と同じ MEAN_STD 逆正規化を適用する（config.normalization_mapping["ACTION"] = "MEAN_STD"）。
+        # SmolVLAPolicy.select_action() は正規化空間のアクションを返すため、
+        # ここで元スケールに戻さないと LIBERO へ渡すアクションが小さすぎたり大きすぎたりする。
+        action_stats = self.norm_stats.get('action')
+        if action_stats is not None and 'mean' in action_stats and 'std' in action_stats:
+            a_mean = action_stats['mean'].astype(np.float32)
+            a_std = action_stats['std'].astype(np.float32)
+            # action_array shape: (1, 7)  (broadcasting で問題なし)
+            action_array = action_array * (a_std + 1e-8) + a_mean
+            if self.action_count < 3:
+                print(f"[MyPolicy] Unnormalized action (mean/std applied): {action_array}")
+        else:
+            print(f"[MyPolicy] WARNING: action stats not found; skipping unnormalization")
+
+        # --- Y 軸鏡映 (action 側) ---
+        # 逆正規化 (=元スケール) の後に反転する。これによりモデル出力（学習空間）を
+        # LIBERO 空間へ変換して送出する。state 側と同じインデックス [1, 3, 5] を反転。
+        if self.INVERT_Y_AXIS:
+            for i in self._Y_MIRROR_INDICES:
+                action_array[0, i] *= -1.0
+            if self.action_count < 3:
+                print(f"[MyPolicy] Y-mirror applied to action at indices {self._Y_MIRROR_INDICES}: {action_array}")
+
         # 1次元に変換して返す (1, 7) -> (7,)
         action_array = action_array.squeeze(0)
         
@@ -434,9 +591,9 @@ class MyPolicy(BasePolicy):
             action_array = action_array[np.newaxis, :]
         
         # Y, Rx, Rz方向を反転（インデックス1, 3, 5）
-        action_array[0, 1] *= -1  # Y方向
-        action_array[0, 3] *= -1  # Rx方向
-        action_array[0, 5] *= -1  # Rz方向
+        # action_array[0, 1] *= -1  # Y方向
+        # action_array[0, 3] *= -1  # Rx方向
+        # action_array[0, 5] *= -1  # Rz方向
         
         # 1次元に変換して返す (1, 7) -> (7,)
         action_array = action_array.squeeze(0)
