@@ -99,6 +99,11 @@ class EvalConfig:
         default_factory=lambda: _PROJECT_ROOT / "videos"
     )
 
+    # 軌跡保存設定
+    # True のとき、各エピソードの state / action を npz に保存する。
+    # 保存先: output_dir / "trajectories/<submission_id>/<task_name>_ep<N>.npz"
+    save_trajectory: bool = False
+
 
 @dataclass
 class SubmissionConstraints:

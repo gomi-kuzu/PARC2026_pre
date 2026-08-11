@@ -117,6 +117,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="動画保存先ディレクトリ（デフォルト: ./videos）",
     )
+    parser.add_argument(
+        "--save-trajectory",
+        action="store_true",
+        help="評価時に state / action の時系列を npz ファイルに保存 (plot_trajectory.py で可視化可能)",
+    )
     return parser.parse_args()
 
 
@@ -137,6 +142,7 @@ def main() -> None:
         max_steps_per_episode=args.max_steps,
         seed=args.seed,
         save_video=args.save_video,
+        save_trajectory=args.save_trajectory,
     )
     if args.output_dir is not None:
         config.output_dir = args.output_dir

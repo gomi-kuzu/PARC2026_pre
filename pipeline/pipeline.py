@@ -175,6 +175,10 @@ class EvaluationPipeline:
         task_results = self.executor.evaluate_tasks(policy, task_infos, perturbation)
         all_task_results.extend(task_results)
 
+        # save_trajectory 用に生の TaskResult を保持しておく
+        self._last_task_results = getattr(self, "_last_task_results", [])
+        self._last_task_results.extend(all_task_results)
+
         track_score = self.scorer.score_track(track, eval_benchmark, all_task_results)
 
         return track_score
@@ -218,6 +222,59 @@ class EvaluationPipeline:
             json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
 
         logger.info("結果を保存: %s", output_path)
+
+        # 軌跡データ保存 (--save-trajectory 指定時)
+        if self.config.save_trajectory:
+            self._save_trajectories(result)
+
+    def _save_trajectories(self, result: PipelineResult) -> None:
+        """各エピソードの state / action 軌跡を npz に保存する。
+
+        npz 内のキー:
+          ee_positions   : (T, 3)  — robot0_eef_pos の時系列
+          ee_orientations: (T, 4)  — robot0_eef_quat (xyzw) の時系列
+          gripper_qpos   : (T, 2)  — robot0_gripper_qpos の時系列
+          actions        : (T, 7)  — policy が返したアクション [dx,dy,dz,droll,dpitch,dyaw,gripper]
+          joint_positions: (T, 7)  — robot0_joint_pos の時系列
+          rewards        : (T,)    — 報酬の時系列
+          success        : scalar bool
+          task_name      : str (in meta.json)
+        """
+        import numpy as np
+
+        traj_dir = self.config.output_dir / "trajectories" / result.submission_id
+        traj_dir.mkdir(parents=True, exist_ok=True)
+
+        n_saved = 0
+        for ts in result.track_scores:
+            for task_result in ts.task_scores:
+                # task_result は TaskScore (scorer.py) で TaskResult は executor 内に留まるため
+                # pipeline.run() 内で task_result を直接保持していない。
+                # ここでは track_score が保持している生データを使う。
+                pass  # 後述の _evaluate_track を wrap する形で実装
+
+        # track_results が result に含まれていないため、
+        # _evaluate_track をオーバーライドして EpisodeResult を横取りする。
+        # ここでは self._last_task_results に格納しておく（下記 _evaluate_track 参照）。
+        task_results = getattr(self, "_last_task_results", [])
+        for task_result in task_results:
+            for ep in task_result.episodes:
+                if not ep.actions:
+                    continue
+                fname = f"{ep.task_name}_ep{ep.episode_id:03d}.npz"
+                fpath = traj_dir / fname
+                np.savez(
+                    fpath,
+                    ee_positions=np.array(ep.ee_positions, dtype=np.float32),
+                    ee_orientations=np.array(ep.ee_orientations, dtype=np.float32),
+                    gripper_qpos=np.array(ep.gripper_qpos, dtype=np.float32),
+                    actions=np.array(ep.actions, dtype=np.float32),
+                    joint_positions=np.array(ep.joint_positions, dtype=np.float32),
+                    rewards=np.array(ep.rewards, dtype=np.float32),
+                    success=np.bool_(ep.success),
+                )
+                n_saved += 1
+        logger.info("軌跡データを %d エピソード保存: %s", n_saved, traj_dir)
 
     def run_single_track(
         self,
