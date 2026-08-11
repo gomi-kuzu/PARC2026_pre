@@ -208,7 +208,7 @@ class MyPolicy(BasePolicy):
             #   self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
             # と書かれているため、config.n_action_steps を下げるだけでキュー投入本数を絞れる。
             # 参考: submission/lerobot/src/lerobot/policies/smolvla/modeling_smolvla.py:346
-            _inference_n_action_steps = 16#8#10
+            _inference_n_action_steps = 8#16#10
             original_n_action_steps = getattr(self.policy.config, "n_action_steps", None)
             self.policy.config.n_action_steps = _inference_n_action_steps
             print(f"[MyPolicy] Overriding n_action_steps for inference: "
@@ -449,6 +449,14 @@ class MyPolicy(BasePolicy):
         task_text = self.instruction if hasattr(self, 'instruction') and self.instruction else ""
         if not task_text:
             task_text = "Pick and place task"  # デフォルトの指示
+
+        # --- SmolVLANewLineProcessor 相当 ---
+        # 学習時の preprocessor パイプラインは `SmolVLANewLineProcessor` により
+        # task 文字列の末尾に必ず '\n' を付けてからトークナイズする。
+        # 参考: submission/lerobot/src/lerobot/policies/smolvla/processor_smolvla.py:L72
+        # 推論時に同じことをしないとトークン列が学習時と 1 token ずれる可能性がある。
+        if not task_text.endswith("\n"):
+            task_text = task_text + "\n"
         
         # トークン化（policy_preprocessor.jsonの設定に従う）
         tokenized = self.tokenizer(
