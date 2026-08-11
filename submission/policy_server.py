@@ -208,7 +208,7 @@ class MyPolicy(BasePolicy):
             #   self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
             # と書かれているため、config.n_action_steps を下げるだけでキュー投入本数を絞れる。
             # 参考: submission/lerobot/src/lerobot/policies/smolvla/modeling_smolvla.py:346
-            _inference_n_action_steps = 16#10
+            _inference_n_action_steps = 16#8#10
             original_n_action_steps = getattr(self.policy.config, "n_action_steps", None)
             self.policy.config.n_action_steps = _inference_n_action_steps
             print(f"[MyPolicy] Overriding n_action_steps for inference: "
@@ -375,6 +375,8 @@ class MyPolicy(BasePolicy):
             img = img.astype(np.float32) / 255.0
             # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
+            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
+            # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
             mapped_obs['observation.images.camera1'] = img_tensor.to(self.device)
         
         if 'robot0_eye_in_hand_image' in obs:
@@ -391,6 +393,8 @@ class MyPolicy(BasePolicy):
             img = img.astype(np.float32) / 255.0
             # tensor変換 (128,128) のまま渡す → モデル内 resize_with_pad(512,512) が直接スケールする
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
+            img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
+            # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
             # 学習時のrename_map (observation.images.wrist -> camera3) に合わせる。
             # camera2は学習時に存在しない（empty_cameras=0）ため設定しない。
             mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
