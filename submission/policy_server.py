@@ -360,7 +360,7 @@ class MyPolicy(BasePolicy):
         mapped_obs = {}
         
         # 画像のマッピングと前処理
-        # 学習時のrename_mapに合わせて camera1, camera2, camera3 を使用
+        # config.json の input_features キーに合わせて front / wrist を使用
         if 'agentview_image' in obs:
             img = obs['agentview_image']  # (128, 128, 3) uint8
             # 本家 LiberoProcessorStep は H,W 両方をフリップする 180° 回転のみを適用する
@@ -377,7 +377,7 @@ class MyPolicy(BasePolicy):
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
             img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
             # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
-            mapped_obs['observation.images.camera1'] = img_tensor.to(self.device)
+            mapped_obs['observation.images.front'] = img_tensor.to(self.device)
         
         if 'robot0_eye_in_hand_image' in obs:
             img = obs['robot0_eye_in_hand_image']  # (128, 128, 3) uint8
@@ -395,9 +395,7 @@ class MyPolicy(BasePolicy):
             img_tensor = torch.from_numpy(img).unsqueeze(0)  # (1, 3, 128, 128)
             img_tensor = F.interpolate(img_tensor, size=(256, 256), mode='bilinear', align_corners=False)
             # バッチ次元を保持してGPUに転送 (1, 3, 256, 256)
-            # 学習時のrename_map (observation.images.wrist -> camera3) に合わせる。
-            # camera2は学習時に存在しない（empty_cameras=0）ため設定しない。
-            mapped_obs['observation.images.camera3'] = img_tensor.to(self.device)
+            mapped_obs['observation.images.wrist'] = img_tensor.to(self.device)
         
         # 状態データの結合 (8次元に)
         # 学習データセット (libero_plus / libero_spatial_dataset_ex) の仕様:
