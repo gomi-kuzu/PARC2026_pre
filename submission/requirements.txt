@@ -3,6 +3,7 @@ fastapi>=0.68
 uvicorn>=0.15
 msgpack>=1.0
 numpy>=1.19
+requests>=2.28
 
 # LeRobot v0.4.4 SmolVLA推論に必要な依存関係
 # 注意: バンドルされたlerobotディレクトリをsys.pathで読み込むため、ここではlerobotの依存のみ記載
@@ -17,10 +18,10 @@ safetensors>=0.4.3,<1.0.0
 huggingface-hub>=0.34.2,<0.36.0
 
 # PyTorch (LeRobot v0.4.4互換バージョン)
-# GPU環境: pip install torch==2.10.0 torchvision==0.25.0 (デフォルトでCUDA版)
-# CPU環境: pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
-torch==2.10.0
-torchvision==0.25.0
+# 注意: 完全固定ではなく範囲指定にすることで、採点サーバーに同等バージョンが
+# 既インストールの場合に pip が再インストール（CUDA libの上書き）を試みないようにする
+torch>=2.10.0,<2.12.0
+torchvision>=0.25.0,<0.27.0
 
 # データ処理
 datasets>=4.0.0,<5.0.0
